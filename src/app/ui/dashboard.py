@@ -1,9 +1,22 @@
 # src/app/ui/dashboard.py
 
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import os
 import pandas as pd
 import streamlit as st
 
-from app.db.conn import get_conn  # garanta PYTHONPATH=. ao rodar
+# =========================
+# Import robusto (local + cloud)
+# =========================
+# Garante que ".../src" esteja no sys.path no Streamlit Cloud e no localhost
+SRC_DIR = Path(__file__).resolve().parents[2]  # .../src
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from app.db.conn import get_conn  # noqa: E402
 
 # =========================
 # Streamlit config + CSS (mobile)
@@ -74,10 +87,6 @@ def load_filters(uf: str):
 
 @st.cache_data(ttl=60)
 def load_bairros_locais(uf: str, municipio: str | None):
-    """
-    Carrega listas de Bairro e Local de votação de forma "cascata" pelo município
-    para evitar selects gigantes.
-    """
     if not municipio:
         return [], []
 
@@ -107,7 +116,6 @@ def load_bairros_locais(uf: str, municipio: str | None):
 
     bairros = bairros_df["nome"].tolist() if len(bairros_df) else []
     locais = locais_df["nome"].tolist() if len(locais_df) else []
-
     return bairros, locais
 
 
@@ -132,49 +140,12 @@ def query_ranking(params: dict, order_by_votes: bool) -> pd.DataFrame:
       AND e.turno = %(turno)s
       AND e.cargo = %(cargo)s
       AND m.uf = %(uf)s
-
-      -- filtros opcionais (sem AmbiguousParameter)
       AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
       AND upper(COALESCE(r.nome, '')) = upper(COALESCE(%(regional)s, COALESCE(r.nome, '')))
       AND upper(COALESCE(b.nome, '')) = upper(COALESCE(%(bairro)s, COALESCE(b.nome, '')))
       AND upper(l.nome) = upper(COALESCE(%(local_votacao)s, l.nome))
-
     GROUP BY c.nome, p.sigla
     {order_sql};
-    """
-    return df_query(sql, params)
-
-
-def query_top1(params: dict) -> pd.DataFrame:
-    sql = """
-    SELECT
-      c.nome AS candidato,
-      p.sigla AS partido,
-      SUM(f.votos) AS votos
-    FROM fato_votos_local f
-    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
-    JOIN dim_partido p ON p.id_partido = c.id_partido
-    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
-    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
-    JOIN dim_local_votacao l ON l.id_local = f.id_local
-    LEFT JOIN dim_bairro b ON b.id_bairro = l.id_bairro
-    LEFT JOIN dim_regional r ON r.id_regional = b.id_regional
-    WHERE
-      e.ano = %(ano)s
-      AND e.tipo = %(tipo)s
-      AND e.turno = %(turno)s
-      AND e.cargo = %(cargo)s
-      AND m.uf = %(uf)s
-
-      -- filtros opcionais (sem AmbiguousParameter)
-      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
-      AND upper(COALESCE(r.nome, '')) = upper(COALESCE(%(regional)s, COALESCE(r.nome, '')))
-      AND upper(COALESCE(b.nome, '')) = upper(COALESCE(%(bairro)s, COALESCE(b.nome, '')))
-      AND upper(l.nome) = upper(COALESCE(%(local_votacao)s, l.nome))
-
-    GROUP BY c.nome, p.sigla
-    ORDER BY votos DESC, candidato ASC
-    LIMIT 1;
     """
     return df_query(sql, params)
 
@@ -184,7 +155,8 @@ def query_top1(params: dict) -> pd.DataFrame:
 # =========================
 st.title("GOVERNIX • Dashboard Eleitoral")
 
-with st.expander("Diagnóstico", expanded=True):
+# Diagnóstico (ajuda local + cloud)
+with st.expander("Diagnóstico", expanded=False):
     try:
         with get_conn() as c:
             with c.cursor() as cur:
@@ -198,8 +170,14 @@ with st.expander("Diagnóstico", expanded=True):
         st.exception(e)
         st.stop()
 
-# Sidebar: apenas avançado
-default_uf = "CE"
+# Sidebar: avançado
+def get_secret(key: str, default=None):
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+default_uf = get_secret("UF_PADRAO", "CE")
 with st.sidebar:
     st.header("Filtros avançados")
     uf = st.text_input("UF", value=default_uf).strip().upper()
@@ -220,7 +198,8 @@ st.subheader("Filtros principais")
 col1, col2 = st.columns(2)
 with col1:
     ano = st.selectbox("Ano", anos) if anos else 0
-    cargo = st.selectbox("Cargo", cargos) if cargos else ""
+    cargo_default_idx = cargos.index("Vereador") if "Vereador" in cargos else 0
+    cargo = st.selectbox("Cargo", cargos, index=cargo_default_idx) if cargos else ""
 with col2:
     regional = st.selectbox("Regional (opcional)", ["(Todas)"] + regionais) if regionais else "(Todas)"
     busca = st.text_input("Buscar candidato (contém)")
@@ -249,43 +228,6 @@ params = {
     "local_votacao": None if local_votacao == "(Todos)" else local_votacao,
 }
 
-# Perguntas rápidas (mobile friendly)
-# st.subheader("Perguntas rápidas")
-
-# def run_quick(cargo_override: str, regional_override: str | None):
-#     p = dict(params)
-#     p["cargo"] = cargo_override
-#     p["regional"] = regional_override
-
-#     # perguntas rápidas normalmente ignoram filtros muito específicos
-#     p["bairro"] = None
-#     p["local_votacao"] = None
-
-#     top = query_top1(p)
-#     if len(top) == 0:
-#         st.warning("Sem dados para esse recorte.")
-#         return
-#     st.success(
-#         f"{cargo_override} mais votado"
-#         + (f" em {regional_override}" if regional_override else "")
-#         + f": {top.loc[0,'candidato']} ({top.loc[0,'partido']}) • {int(top.loc[0,'votos'])} votos"
-#     )
-
-# with st.expander("Abrir / fechar", expanded=True):
-#     if st.button("Vereador mais votado (Regional 6)"):
-#         run_quick("VEREADOR", "REGIONAL 6")
-
-#     if st.button("Vereador mais votado (no recorte atual)"):
-#         run_quick("VEREADOR", params["regional"])
-
-#     if st.button("Top 1 (no recorte atual)"):
-#         top = query_top1(params)
-#         if len(top):
-#             st.info(f"{top.loc[0,'candidato']} ({top.loc[0,'partido']}) • {int(top.loc[0,'votos'])} votos")
-#         else:
-#             st.warning("Sem dados para esse recorte.")
-
-# Tabela
 st.subheader("Candidatos")
 
 df = query_ranking(params, order_by_votes=(ordem == "Votos (desc)"))
