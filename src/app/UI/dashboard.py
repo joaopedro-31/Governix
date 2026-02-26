@@ -3,7 +3,7 @@
 import pandas as pd
 import streamlit as st
 
-from src.app.db.conn import get_conn  # garanta PYTHONPATH=. ao rodar
+from app.db.conn import get_conn  # garanta PYTHONPATH=. ao rodar
 
 # =========================
 # Streamlit config + CSS (mobile)
