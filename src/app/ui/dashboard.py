@@ -198,7 +198,7 @@ st.subheader("Filtros principais")
 col1, col2 = st.columns(2)
 with col1:
     ano = st.selectbox("Ano", anos) if anos else 0
-    cargo_default_idx = cargos.index("Vereador") if "Vereador" in cargos else 0
+    cargo_default_idx = cargos.index("VEREADOR") if "VEREADOR" in cargos else 0
     cargo = st.selectbox("Cargo", cargos, index=cargo_default_idx) if cargos else ""
 with col2:
     regional = st.selectbox("Regional (opcional)", ["(Todas)"] + regionais) if regionais else "(Todas)"
@@ -214,7 +214,16 @@ col3, col4 = st.columns(2)
 with col3:
     ordem = st.selectbox("Ordenação", ["Alfabética", "Votos (desc)"])
 with col4:
-    top_n = st.slider("Mostrar quantos?", min_value=20, max_value=500, value=50, step=10)
+    mostrar_opcao = st.selectbox(
+        "Mostrar quantos?",
+        ["10","50", "100", "200", "Todos"],
+        index=0
+    )
+
+    if mostrar_opcao == "Todos":
+        top_n = None
+    else:
+        top_n = int(mostrar_opcao.split()[0])
 
 params = {
     "ano": ano,
