@@ -155,6 +155,153 @@ def get_secret(key: str, default=None):
         return default
 
 
+def list_candidatos_match(params: dict, termo: str) -> list[str]:
+    sql = """
+    SELECT DISTINCT c.nome AS candidato
+    FROM fato_votos_local f
+    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
+    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
+    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
+    WHERE
+      e.ano = %(ano)s
+      AND e.tipo = %(tipo)s
+      AND e.turno = %(turno)s
+      AND e.cargo = %(cargo)s
+      AND m.uf = %(uf)s
+      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
+      AND c.nome ILIKE %(q)s
+    ORDER BY 1;
+    """
+    df = df_query(sql, {**params, "q": f"%{termo}%"} )
+    return df["candidato"].tolist() if len(df) else []
+
+
+def query_relatorio_candidato(params: dict, candidato: str) -> dict:
+    p = dict(params)
+    p["candidato"] = candidato
+    # não “corta” o relatório
+    p["bairro"] = None
+    p["local_votacao"] = None
+
+    sql_total = """
+    SELECT
+      c.nome AS candidato,
+      p.sigla AS partido,
+      m.nome AS municipio,
+      e.ano,
+      e.tipo,
+      e.turno,
+      e.cargo,
+      SUM(f.votos) AS votos_totais
+    FROM fato_votos_local f
+    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
+    JOIN dim_partido p ON p.id_partido = c.id_partido
+    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
+    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
+    JOIN dim_local_votacao l ON l.id_local = f.id_local
+    LEFT JOIN dim_bairro b ON b.id_bairro = l.id_bairro
+    LEFT JOIN dim_regional r ON r.id_regional = b.id_regional
+    WHERE
+      e.ano = %(ano)s
+      AND e.tipo = %(tipo)s
+      AND e.turno = %(turno)s
+      AND e.cargo = %(cargo)s
+      AND m.uf = %(uf)s
+      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
+      AND upper(COALESCE(r.nome, '')) = upper(COALESCE(%(regional)s, COALESCE(r.nome, '')))
+      AND c.nome = %(candidato)s
+    GROUP BY c.nome, p.sigla, m.nome, e.ano, e.tipo, e.turno, e.cargo;
+    """
+    info = df_query(sql_total, p)
+    if not len(info):
+        return {"ok": False}
+
+    sql_bairros = """
+    SELECT
+      COALESCE(b.nome, '(Sem bairro)') AS bairro,
+      SUM(f.votos) AS votos
+    FROM fato_votos_local f
+    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
+    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
+    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
+    JOIN dim_local_votacao l ON l.id_local = f.id_local
+    LEFT JOIN dim_bairro b ON b.id_bairro = l.id_bairro
+    LEFT JOIN dim_regional r ON r.id_regional = b.id_regional
+    WHERE
+      e.ano = %(ano)s
+      AND e.tipo = %(tipo)s
+      AND e.turno = %(turno)s
+      AND e.cargo = %(cargo)s
+      AND m.uf = %(uf)s
+      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
+      AND upper(COALESCE(r.nome, '')) = upper(COALESCE(%(regional)s, COALESCE(r.nome, '')))
+      AND c.nome = %(candidato)s
+    GROUP BY 1
+    ORDER BY votos DESC
+    LIMIT 10;
+    """
+    top_bairros = df_query(sql_bairros, p)
+
+    sql_locais = """
+    SELECT
+      l.nome AS local_votacao,
+      SUM(f.votos) AS votos
+    FROM fato_votos_local f
+    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
+    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
+    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
+    JOIN dim_local_votacao l ON l.id_local = f.id_local
+    LEFT JOIN dim_bairro b ON b.id_bairro = l.id_bairro
+    LEFT JOIN dim_regional r ON r.id_regional = b.id_regional
+    WHERE
+      e.ano = %(ano)s
+      AND e.tipo = %(tipo)s
+      AND e.turno = %(turno)s
+      AND e.cargo = %(cargo)s
+      AND m.uf = %(uf)s
+      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
+      AND upper(COALESCE(r.nome, '')) = upper(COALESCE(%(regional)s, COALESCE(r.nome, '')))
+      AND c.nome = %(candidato)s
+    GROUP BY 1
+    ORDER BY votos DESC
+    LIMIT 10;
+    """
+    top_locais = df_query(sql_locais, p)
+
+    sql_regionais = """
+    SELECT
+      COALESCE(r.nome, '(Sem regional)') AS regional,
+      SUM(f.votos) AS votos
+    FROM fato_votos_local f
+    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
+    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
+    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
+    JOIN dim_local_votacao l ON l.id_local = f.id_local
+    LEFT JOIN dim_bairro b ON b.id_bairro = l.id_bairro
+    LEFT JOIN dim_regional r ON r.id_regional = b.id_regional
+    WHERE
+      e.ano = %(ano)s
+      AND e.tipo = %(tipo)s
+      AND e.turno = %(turno)s
+      AND e.cargo = %(cargo)s
+      AND m.uf = %(uf)s
+      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
+      AND c.nome = %(candidato)s
+    GROUP BY 1
+    ORDER BY votos DESC
+    LIMIT 3;
+    """
+    top_regionais = df_query(sql_regionais, p)
+
+    return {
+        "ok": True,
+        "info": info.iloc[0].to_dict(),
+        "top_bairros": top_bairros,
+        "top_locais": top_locais,
+        "top_regionais": top_regionais,
+    }
+
+
 # =========================
 # UI
 # =========================
@@ -174,10 +321,8 @@ with st.expander("Diagnóstico", expanded=False):
         st.exception(e)
         st.stop()
 
-# Defaults
 default_uf = get_secret("UF_PADRAO", "CE")
 
-# ====== Filtros (tudo na tela principal) ======
 st.subheader("Filtros")
 
 # Linha 1: UF / Município
@@ -188,7 +333,6 @@ with c1:
 anos, tipos, turnos, cargos, municipios, regionais = load_filters(uf)
 
 with c2:
-    # município padrão: FORTALEZA (se existir)
     mun_options = ["(Todos)"] + municipios if municipios else ["(Todos)"]
     fortaleza_idx = 0
     for i, m in enumerate(mun_options):
@@ -242,9 +386,10 @@ c11, c12 = st.columns(2)
 with c11:
     ordem = st.selectbox("Ordenação", ["Alfabética", "Votos (desc)"])
 with c12:
-    mostrar_opcao = st.selectbox("Mostrar quantos?", [ "10", "50", "100", "200", "500", "Todos"], index=0)
+    mostrar_opcao = st.selectbox("Mostrar quantos?", ["10","50", "100", "200", "500", "Todos"], index=0)
     top_n = None if mostrar_opcao == "Todos" else int(mostrar_opcao)
 
+# ✅ params AGORA existe antes de usar na busca/relatório
 params = {
     "ano": ano,
     "tipo": tipo,
@@ -256,6 +401,40 @@ params = {
     "bairro": None if bairro == "(Todos)" else bairro,
     "local_votacao": None if local_votacao == "(Todos)" else local_votacao,
 }
+
+# ====== Relatório (se houver busca) ======
+if busca and len(busca.strip()) >= 2:
+    candidatos_match = list_candidatos_match(params, busca.strip())
+
+    if len(candidatos_match) == 0:
+        st.warning("Nenhum candidato encontrado para essa busca no recorte atual.")
+    else:
+        st.subheader("Relatório do candidato")
+
+        cand_sel = st.selectbox("Selecione o candidato", candidatos_match, index=0)
+        if st.button("Gerar relatório", type="primary"):
+            rel = query_relatorio_candidato(params, cand_sel)
+            if not rel.get("ok"):
+                st.warning("Sem dados para esse candidato no recorte atual.")
+            else:
+                info = rel["info"]
+                cA, cB, cC, cD = st.columns(4)
+                cA.metric("Votos totais", f"{int(info['votos_totais']):,}".replace(",", "."))
+                cB.metric("Partido", info["partido"])
+                cC.metric("Município", info["municipio"])
+                cD.metric("Eleição", f"{info['ano']} • {info['tipo']} • T{info['turno']}")
+                st.markdown(f"**Candidato:** {info['candidato']}  \n**Cargo:** {info['cargo']}")
+
+                t1, t2 = st.columns(2)
+                with t1:
+                    st.markdown("### Top 10 Bairros")
+                    st.dataframe(rel["top_bairros"], use_container_width=True, hide_index=True)
+                with t2:
+                    st.markdown("### Top 10 Locais de votação")
+                    st.dataframe(rel["top_locais"], use_container_width=True, hide_index=True)
+
+                st.markdown("### Top 3 Regionais")
+                st.dataframe(rel["top_regionais"], use_container_width=True, hide_index=True)
 
 # ====== Tabela ======
 st.subheader("Candidatos")
