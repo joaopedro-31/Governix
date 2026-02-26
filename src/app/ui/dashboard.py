@@ -1,17 +1,15 @@
 # src/app/ui/dashboard.py
-
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-import os
+
 import pandas as pd
 import streamlit as st
 
 # =========================
 # Import robusto (local + cloud)
 # =========================
-# Garante que ".../src" esteja no sys.path no Streamlit Cloud e no localhost
 SRC_DIR = Path(__file__).resolve().parents[2]  # .../src
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -51,7 +49,7 @@ st.markdown(
 )
 
 # =========================
-# DB helpers (conexão curta por query -> evita transação abortada)
+# Helpers
 # =========================
 def df_query(sql: str, params: dict | None = None) -> pd.DataFrame:
     try:
@@ -150,12 +148,18 @@ def query_ranking(params: dict, order_by_votes: bool) -> pd.DataFrame:
     return df_query(sql, params)
 
 
+def get_secret(key: str, default=None):
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
 # =========================
 # UI
 # =========================
 st.title("GOVERNIX • Dashboard Eleitoral")
 
-# Diagnóstico (ajuda local + cloud)
 with st.expander("Diagnóstico", expanded=False):
     try:
         with get_conn() as c:
@@ -170,60 +174,76 @@ with st.expander("Diagnóstico", expanded=False):
         st.exception(e)
         st.stop()
 
-# Sidebar: avançado
-def get_secret(key: str, default=None):
-    try:
-        return st.secrets.get(key, default)
-    except Exception:
-        return default
-
+# Defaults
 default_uf = get_secret("UF_PADRAO", "CE")
-with st.sidebar:
-    st.header("Filtros avançados")
+
+# ====== Filtros (tudo na tela principal) ======
+st.subheader("Filtros")
+
+# Linha 1: UF / Município
+c1, c2 = st.columns(2)
+with c1:
     uf = st.text_input("UF", value=default_uf).strip().upper()
 
 anos, tipos, turnos, cargos, municipios, regionais = load_filters(uf)
 
-with st.sidebar:
-    tipo = st.selectbox("Tipo", tipos) if tipos else ""
-    turno = st.selectbox("Turno", turnos) if turnos else 1
-    municipio = st.selectbox("Município", ["(Todos)"] + municipios) if municipios else "(Todos)"
+with c2:
+    # município padrão: FORTALEZA (se existir)
+    mun_options = ["(Todos)"] + municipios if municipios else ["(Todos)"]
+    fortaleza_idx = 0
+    for i, m in enumerate(mun_options):
+        if isinstance(m, str) and m.strip().upper() == "FORTALEZA":
+            fortaleza_idx = i
+            break
+    municipio = st.selectbox("Município", mun_options, index=fortaleza_idx)
 
 municipio_val = None if municipio == "(Todos)" else municipio
 bairros, locais = load_bairros_locais(uf, municipio_val)
 
-# Corpo: principais
-st.subheader("Filtros principais")
-
-col1, col2 = st.columns(2)
-with col1:
+# Linha 2: Tipo / Ano
+c3, c4 = st.columns(2)
+with c3:
+    tipo = st.selectbox("Tipo", tipos) if tipos else ""
+with c4:
     ano = st.selectbox("Ano", anos) if anos else 0
+
+# Linha 3: Turno / Cargo
+c5, c6 = st.columns(2)
+with c5:
+    turno = st.selectbox("Turno", turnos) if turnos else 1
+with c6:
     cargo_default_idx = cargos.index("VEREADOR") if "VEREADOR" in cargos else 0
     cargo = st.selectbox("Cargo", cargos, index=cargo_default_idx) if cargos else ""
-with col2:
+
+# Linha 4: Regional / Bairro
+c7, c8 = st.columns(2)
+with c7:
     regional = st.selectbox("Regional (opcional)", ["(Todas)"] + regionais) if regionais else "(Todas)"
+with c8:
+    if municipio_val is None:
+        bairro = "(Todos)"
+        st.selectbox("Bairro (opcional)", ["(Todos)"], index=0, disabled=True)
+    else:
+        bairro = st.selectbox("Bairro (opcional)", ["(Todos)"] + bairros) if bairros else "(Todos)"
+
+# Linha 5: Local / Busca
+c9, c10 = st.columns(2)
+with c9:
+    if municipio_val is None:
+        local_votacao = "(Todos)"
+        st.selectbox("Local de votação (opcional)", ["(Todos)"], index=0, disabled=True)
+    else:
+        local_votacao = st.selectbox("Local de votação (opcional)", ["(Todos)"] + locais) if locais else "(Todos)"
+with c10:
     busca = st.text_input("Buscar candidato (contém)")
 
-col5, col6 = st.columns(2)
-with col5:
-    bairro = st.selectbox("Bairro (opcional)", ["(Todos)"] + bairros) if bairros else "(Todos)"
-with col6:
-    local_votacao = st.selectbox("Local de votação (opcional)", ["(Todos)"] + locais) if locais else "(Todos)"
-
-col3, col4 = st.columns(2)
-with col3:
+# Linha 6: Ordenação / Quantidade
+c11, c12 = st.columns(2)
+with c11:
     ordem = st.selectbox("Ordenação", ["Alfabética", "Votos (desc)"])
-with col4:
-    mostrar_opcao = st.selectbox(
-        "Mostrar quantos?",
-        ["10","50", "100", "200", "Todos"],
-        index=0
-    )
-
-    if mostrar_opcao == "Todos":
-        top_n = None
-    else:
-        top_n = int(mostrar_opcao.split()[0])
+with c12:
+    mostrar_opcao = st.selectbox("Mostrar quantos?", [ "10", "50", "100", "200", "500", "Todos"], index=0)
+    top_n = None if mostrar_opcao == "Todos" else int(mostrar_opcao)
 
 params = {
     "ano": ano,
@@ -237,6 +257,7 @@ params = {
     "local_votacao": None if local_votacao == "(Todos)" else local_votacao,
 }
 
+# ====== Tabela ======
 st.subheader("Candidatos")
 
 df = query_ranking(params, order_by_votes=(ordem == "Votos (desc)"))
@@ -244,4 +265,7 @@ df = query_ranking(params, order_by_votes=(ordem == "Votos (desc)"))
 if busca:
     df = df[df["candidato"].str.contains(busca, case=False, na=False)]
 
-st.dataframe(df.head(top_n), use_container_width=True, hide_index=True, height=520)
+if top_n is None:
+    st.dataframe(df, use_container_width=True, hide_index=True, height=520)
+else:
+    st.dataframe(df.head(top_n), use_container_width=True, hide_index=True, height=520)
