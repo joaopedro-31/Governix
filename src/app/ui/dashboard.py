@@ -184,6 +184,20 @@ def query_top1(params: dict) -> pd.DataFrame:
 # =========================
 st.title("GOVERNIX • Dashboard Eleitoral")
 
+with st.expander("Diagnóstico", expanded=True):
+    try:
+        with get_conn() as c:
+            with c.cursor() as cur:
+                cur.execute("SELECT current_schema(), now();")
+                schema, now = cur.fetchone()
+                st.success(f"DB OK • schema={schema} • now={now}")
+                cur.execute("SELECT 1 FROM dim_eleicao LIMIT 1;")
+                st.success("Tabela dim_eleicao OK")
+    except Exception as e:
+        st.error("Falha ao conectar ou consultar tabelas.")
+        st.exception(e)
+        st.stop()
+
 # Sidebar: apenas avançado
 default_uf = "CE"
 with st.sidebar:
