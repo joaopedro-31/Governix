@@ -10,14 +10,14 @@ import streamlit as st
 # =========================
 # Import robusto (local + cloud)
 # =========================
-SRC_DIR = Path(__file__).resolve().parents[2]  # .../src
+SRC_DIR = Path(__file__).resolve().parents[2]
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from app.db.conn import get_conn  # noqa: E402
 
 # =========================
-# Streamlit config + CSS (mobile)
+# Streamlit config + CSS
 # =========================
 st.set_page_config(
     page_title="GOVERNIX • Eleições",
@@ -66,88 +66,6 @@ def df_query(sql: str, params: dict | None = None) -> pd.DataFrame:
         raise
 
 
-@st.cache_data(ttl=60)
-def load_filters(uf: str):
-    anos = df_query("SELECT DISTINCT ano FROM dim_eleicao ORDER BY ano DESC;")["ano"].tolist()
-    tipos = df_query("SELECT DISTINCT tipo FROM dim_eleicao ORDER BY tipo;")["tipo"].tolist()
-    turnos = df_query("SELECT DISTINCT turno FROM dim_eleicao ORDER BY turno;")["turno"].tolist()
-    cargos = df_query("SELECT DISTINCT cargo FROM dim_eleicao ORDER BY cargo;")["cargo"].tolist()
-
-    municipios = df_query(
-        "SELECT nome FROM dim_municipio WHERE uf = %(uf)s ORDER BY nome;",
-        {"uf": uf},
-    )["nome"].tolist()
-
-    regionais = df_query("SELECT nome FROM dim_regional ORDER BY nome;")["nome"].tolist()
-
-    return anos, tipos, turnos, cargos, municipios, regionais
-
-
-@st.cache_data(ttl=60)
-def load_bairros_locais(uf: str, municipio: str | None):
-    if not municipio:
-        return [], []
-
-    bairros_df = df_query(
-        """
-        SELECT DISTINCT b.nome
-        FROM dim_bairro b
-        JOIN dim_municipio m ON m.id_municipio = b.id_municipio
-        WHERE m.uf = %(uf)s AND upper(m.nome) = upper(%(municipio)s)
-          AND b.nome IS NOT NULL AND trim(b.nome) <> ''
-        ORDER BY b.nome;
-        """,
-        {"uf": uf, "municipio": municipio},
-    )
-
-    locais_df = df_query(
-        """
-        SELECT DISTINCT l.nome
-        FROM dim_local_votacao l
-        JOIN dim_municipio m ON m.id_municipio = l.id_municipio
-        WHERE m.uf = %(uf)s AND upper(m.nome) = upper(%(municipio)s)
-          AND l.nome IS NOT NULL AND trim(l.nome) <> ''
-        ORDER BY l.nome;
-        """,
-        {"uf": uf, "municipio": municipio},
-    )
-
-    bairros = bairros_df["nome"].tolist() if len(bairros_df) else []
-    locais = locais_df["nome"].tolist() if len(locais_df) else []
-    return bairros, locais
-
-
-def query_ranking(params: dict, order_by_votes: bool) -> pd.DataFrame:
-    order_sql = "ORDER BY votos DESC, candidato ASC" if order_by_votes else "ORDER BY candidato ASC"
-    sql = f"""
-    SELECT
-      c.nome AS candidato,
-      p.sigla AS partido,
-      SUM(f.votos) AS votos
-    FROM fato_votos_local f
-    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
-    JOIN dim_partido p ON p.id_partido = c.id_partido
-    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
-    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
-    JOIN dim_local_votacao l ON l.id_local = f.id_local
-    LEFT JOIN dim_bairro b ON b.id_bairro = l.id_bairro
-    LEFT JOIN dim_regional r ON r.id_regional = b.id_regional
-    WHERE
-      e.ano = %(ano)s
-      AND e.tipo = %(tipo)s
-      AND e.turno = %(turno)s
-      AND e.cargo = %(cargo)s
-      AND m.uf = %(uf)s
-      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
-      AND upper(COALESCE(r.nome, '')) = upper(COALESCE(%(regional)s, COALESCE(r.nome, '')))
-      AND upper(COALESCE(b.nome, '')) = upper(COALESCE(%(bairro)s, COALESCE(b.nome, '')))
-      AND upper(l.nome) = upper(COALESCE(%(local_votacao)s, l.nome))
-    GROUP BY c.nome, p.sigla
-    {order_sql};
-    """
-    return df_query(sql, params)
-
-
 def get_secret(key: str, default=None):
     try:
         return st.secrets.get(key, default)
@@ -155,143 +73,257 @@ def get_secret(key: str, default=None):
         return default
 
 
-def list_candidatos_match(params: dict, termo: str) -> list[str]:
-    sql = """
-    SELECT DISTINCT c.nome AS candidato
-    FROM fato_votos_local f
-    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
-    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
-    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
-    WHERE
-      e.ano = %(ano)s
-      AND e.tipo = %(tipo)s
-      AND e.turno = %(turno)s
-      AND e.cargo = %(cargo)s
-      AND m.uf = %(uf)s
-      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
-      AND c.nome ILIKE %(q)s
-    ORDER BY 1;
+def build_where_and_params(base_params: dict, busca: str | None = None, candidato: str | None = None):
+    where = [
+        "ano = %(ano)s",
+        "tipo = %(tipo)s",
+        "turno = %(turno)s",
+        "cargo = %(cargo)s",
+        "uf = %(uf)s",
+    ]
+
+    sql_params = {
+        "ano": base_params["ano"],
+        "tipo": base_params["tipo"],
+        "turno": base_params["turno"],
+        "cargo": base_params["cargo"],
+        "uf": base_params["uf"],
+    }
+
+    if base_params.get("municipio"):
+        where.append("municipio = %(municipio)s")
+        sql_params["municipio"] = base_params["municipio"]
+
+    if base_params.get("regional"):
+        where.append("regional = %(regional)s")
+        sql_params["regional"] = base_params["regional"]
+
+    if base_params.get("bairro"):
+        where.append("bairro = %(bairro)s")
+        sql_params["bairro"] = base_params["bairro"]
+
+    if base_params.get("local_votacao"):
+        where.append("local_votacao = %(local_votacao)s")
+        sql_params["local_votacao"] = base_params["local_votacao"]
+
+    if busca and busca.strip():
+        where.append("candidato ILIKE %(busca)s")
+        sql_params["busca"] = f"%{busca.strip()}%"
+
+    if candidato:
+        where.append("candidato = %(candidato)s")
+        sql_params["candidato"] = candidato
+
+    return where, sql_params
+
+
+# =========================
+# Carregamento de filtros
+# =========================
+@st.cache_data(ttl=300)
+def load_filters(uf: str):
+    anos = df_query(
+        """
+        SELECT DISTINCT ano
+        FROM mv_ranking_candidato
+        ORDER BY ano DESC;
+        """
+    )["ano"].tolist()
+
+    tipos = df_query(
+        """
+        SELECT DISTINCT tipo
+        FROM mv_ranking_candidato
+        ORDER BY tipo;
+        """
+    )["tipo"].tolist()
+
+    turnos = df_query(
+        """
+        SELECT DISTINCT turno
+        FROM mv_ranking_candidato
+        ORDER BY turno;
+        """
+    )["turno"].tolist()
+
+    cargos = df_query(
+        """
+        SELECT DISTINCT cargo
+        FROM mv_ranking_candidato
+        ORDER BY cargo;
+        """
+    )["cargo"].tolist()
+
+    municipios = df_query(
+        """
+        SELECT DISTINCT municipio
+        FROM mv_ranking_candidato
+        WHERE uf = %(uf)s
+        ORDER BY municipio;
+        """,
+        {"uf": uf},
+    )["municipio"].tolist()
+
+    regionais = df_query(
+        """
+        SELECT DISTINCT regional
+        FROM mv_ranking_candidato
+        WHERE uf = %(uf)s
+          AND regional <> ''
+        ORDER BY regional;
+        """,
+        {"uf": uf},
+    )["regional"].tolist()
+
+    return anos, tipos, turnos, cargos, municipios, regionais
+
+
+@st.cache_data(ttl=300)
+def load_bairros_locais(uf: str, municipio: str | None):
+    if not municipio:
+        return [], []
+
+    bairros_df = df_query(
+        """
+        SELECT DISTINCT bairro
+        FROM mv_ranking_candidato
+        WHERE uf = %(uf)s
+          AND municipio = %(municipio)s
+          AND bairro <> ''
+        ORDER BY bairro;
+        """,
+        {"uf": uf, "municipio": municipio},
+    )
+
+    locais_df = df_query(
+        """
+        SELECT DISTINCT local_votacao
+        FROM mv_ranking_candidato
+        WHERE uf = %(uf)s
+          AND municipio = %(municipio)s
+          AND local_votacao <> ''
+        ORDER BY local_votacao;
+        """,
+        {"uf": uf, "municipio": municipio},
+    )
+
+    bairros = bairros_df["bairro"].tolist() if len(bairros_df) else []
+    locais = locais_df["local_votacao"].tolist() if len(locais_df) else []
+    return bairros, locais
+
+
+# =========================
+# Consultas principais
+# =========================
+@st.cache_data(ttl=60)
+def query_ranking(params: dict, order_by_votes: bool, top_n: int | None, busca: str | None = None) -> pd.DataFrame:
+    where, sql_params = build_where_and_params(params, busca=busca)
+
+    order_sql = "ORDER BY votos DESC, candidato ASC" if order_by_votes else "ORDER BY candidato ASC"
+
+    limit_sql = ""
+    if top_n is not None:
+        limit_sql = "LIMIT %(limite)s"
+        sql_params["limite"] = top_n
+
+    sql = f"""
+    SELECT
+        candidato,
+        partido,
+        SUM(votos) AS votos
+    FROM mv_ranking_candidato
+    WHERE {' AND '.join(where)}
+    GROUP BY candidato, partido
+    {order_sql}
+    {limit_sql};
     """
-    df = df_query(sql, {**params, "q": f"%{termo}%"} )
+
+    return df_query(sql, sql_params)
+
+
+@st.cache_data(ttl=60)
+def list_candidatos_match(params: dict, termo: str) -> list[str]:
+    where, sql_params = build_where_and_params(params, busca=termo)
+
+    sql = f"""
+    SELECT DISTINCT candidato
+    FROM mv_ranking_candidato
+    WHERE {' AND '.join(where)}
+    ORDER BY candidato;
+    """
+
+    df = df_query(sql, sql_params)
     return df["candidato"].tolist() if len(df) else []
 
 
+@st.cache_data(ttl=60)
 def query_relatorio_candidato(params: dict, candidato: str) -> dict:
-    p = dict(params)
-    p["candidato"] = candidato
-    # não “corta” o relatório
-    p["bairro"] = None
-    p["local_votacao"] = None
+    # relatório do candidato ignora bairro e local para não "cortar" o total
+    params_rel = dict(params)
+    params_rel["bairro"] = None
+    params_rel["local_votacao"] = None
 
-    sql_total = """
+    where, sql_params = build_where_and_params(params_rel, candidato=candidato)
+
+    sql_total = f"""
     SELECT
-      c.nome AS candidato,
-      p.sigla AS partido,
-      m.nome AS municipio,
-      e.ano,
-      e.tipo,
-      e.turno,
-      e.cargo,
-      SUM(f.votos) AS votos_totais
-    FROM fato_votos_local f
-    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
-    JOIN dim_partido p ON p.id_partido = c.id_partido
-    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
-    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
-    JOIN dim_local_votacao l ON l.id_local = f.id_local
-    LEFT JOIN dim_bairro b ON b.id_bairro = l.id_bairro
-    LEFT JOIN dim_regional r ON r.id_regional = b.id_regional
-    WHERE
-      e.ano = %(ano)s
-      AND e.tipo = %(tipo)s
-      AND e.turno = %(turno)s
-      AND e.cargo = %(cargo)s
-      AND m.uf = %(uf)s
-      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
-      AND upper(COALESCE(r.nome, '')) = upper(COALESCE(%(regional)s, COALESCE(r.nome, '')))
-      AND c.nome = %(candidato)s
-    GROUP BY c.nome, p.sigla, m.nome, e.ano, e.tipo, e.turno, e.cargo;
+        candidato,
+        partido,
+        municipio,
+        ano,
+        tipo,
+        turno,
+        cargo,
+        SUM(votos) AS votos_totais
+    FROM mv_ranking_candidato
+    WHERE {' AND '.join(where)}
+    GROUP BY candidato, partido, municipio, ano, tipo, turno, cargo;
     """
-    info = df_query(sql_total, p)
+    info = df_query(sql_total, sql_params)
     if not len(info):
         return {"ok": False}
 
-    sql_bairros = """
+    sql_bairros = f"""
     SELECT
-      COALESCE(b.nome, '(Sem bairro)') AS bairro,
-      SUM(f.votos) AS votos
-    FROM fato_votos_local f
-    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
-    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
-    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
-    JOIN dim_local_votacao l ON l.id_local = f.id_local
-    LEFT JOIN dim_bairro b ON b.id_bairro = l.id_bairro
-    LEFT JOIN dim_regional r ON r.id_regional = b.id_regional
-    WHERE
-      e.ano = %(ano)s
-      AND e.tipo = %(tipo)s
-      AND e.turno = %(turno)s
-      AND e.cargo = %(cargo)s
-      AND m.uf = %(uf)s
-      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
-      AND upper(COALESCE(r.nome, '')) = upper(COALESCE(%(regional)s, COALESCE(r.nome, '')))
-      AND c.nome = %(candidato)s
+        CASE
+            WHEN bairro IS NULL OR bairro = '' THEN '(Sem bairro)'
+            ELSE bairro
+        END AS bairro,
+        SUM(votos) AS votos
+    FROM mv_ranking_candidato
+    WHERE {' AND '.join(where)}
     GROUP BY 1
     ORDER BY votos DESC
     LIMIT 10;
     """
-    top_bairros = df_query(sql_bairros, p)
+    top_bairros = df_query(sql_bairros, sql_params)
 
-    sql_locais = """
+    sql_locais = f"""
     SELECT
-      l.nome AS local_votacao,
-      SUM(f.votos) AS votos
-    FROM fato_votos_local f
-    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
-    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
-    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
-    JOIN dim_local_votacao l ON l.id_local = f.id_local
-    LEFT JOIN dim_bairro b ON b.id_bairro = l.id_bairro
-    LEFT JOIN dim_regional r ON r.id_regional = b.id_regional
-    WHERE
-      e.ano = %(ano)s
-      AND e.tipo = %(tipo)s
-      AND e.turno = %(turno)s
-      AND e.cargo = %(cargo)s
-      AND m.uf = %(uf)s
-      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
-      AND upper(COALESCE(r.nome, '')) = upper(COALESCE(%(regional)s, COALESCE(r.nome, '')))
-      AND c.nome = %(candidato)s
+        local_votacao,
+        SUM(votos) AS votos
+    FROM mv_ranking_candidato
+    WHERE {' AND '.join(where)}
     GROUP BY 1
     ORDER BY votos DESC
     LIMIT 10;
     """
-    top_locais = df_query(sql_locais, p)
+    top_locais = df_query(sql_locais, sql_params)
 
-    sql_regionais = """
+    sql_regionais = f"""
     SELECT
-      COALESCE(r.nome, '(Sem regional)') AS regional,
-      SUM(f.votos) AS votos
-    FROM fato_votos_local f
-    JOIN dim_candidato c ON c.id_candidato = f.id_candidato
-    JOIN dim_eleicao e ON e.id_eleicao = f.id_eleicao
-    JOIN dim_municipio m ON m.id_municipio = f.id_municipio
-    JOIN dim_local_votacao l ON l.id_local = f.id_local
-    LEFT JOIN dim_bairro b ON b.id_bairro = l.id_bairro
-    LEFT JOIN dim_regional r ON r.id_regional = b.id_regional
-    WHERE
-      e.ano = %(ano)s
-      AND e.tipo = %(tipo)s
-      AND e.turno = %(turno)s
-      AND e.cargo = %(cargo)s
-      AND m.uf = %(uf)s
-      AND upper(m.nome) = upper(COALESCE(%(municipio)s, m.nome))
-      AND c.nome = %(candidato)s
+        CASE
+            WHEN regional IS NULL OR regional = '' THEN '(Sem regional)'
+            ELSE regional
+        END AS regional,
+        SUM(votos) AS votos
+    FROM mv_ranking_candidato
+    WHERE {' AND '.join(where)}
     GROUP BY 1
     ORDER BY votos DESC
     LIMIT 3;
     """
-    top_regionais = df_query(sql_regionais, p)
+    top_regionais = df_query(sql_regionais, sql_params)
 
     return {
         "ok": True,
@@ -314,10 +346,10 @@ with st.expander("Diagnóstico", expanded=False):
                 cur.execute("SELECT current_schema(), now();")
                 schema, now = cur.fetchone()
                 st.success(f"DB OK • schema={schema} • now={now}")
-                cur.execute("SELECT 1 FROM dim_eleicao LIMIT 1;")
-                st.success("Tabela dim_eleicao OK")
+                cur.execute("SELECT 1 FROM mv_ranking_candidato LIMIT 1;")
+                st.success("Materialized view mv_ranking_candidato OK")
     except Exception as e:
-        st.error("Falha ao conectar ou consultar tabelas.")
+        st.error("Falha ao conectar ou consultar a materialized view.")
         st.exception(e)
         st.stop()
 
@@ -386,10 +418,9 @@ c11, c12 = st.columns(2)
 with c11:
     ordem = st.selectbox("Ordenação", ["Alfabética", "Votos (desc)"])
 with c12:
-    mostrar_opcao = st.selectbox("Mostrar quantos?", ["10","50", "100", "200", "500", "Todos"], index=0)
+    mostrar_opcao = st.selectbox("Mostrar quantos?", ["10", "50", "100", "200", "500", "Todos"], index=0)
     top_n = None if mostrar_opcao == "Todos" else int(mostrar_opcao)
 
-# ✅ params AGORA existe antes de usar na busca/relatório
 params = {
     "ano": ano,
     "tipo": tipo,
@@ -410,10 +441,11 @@ if busca and len(busca.strip()) >= 2:
         st.warning("Nenhum candidato encontrado para essa busca no recorte atual.")
     else:
         st.subheader("Relatório do candidato")
-
         cand_sel = st.selectbox("Selecione o candidato", candidatos_match, index=0)
+
         if st.button("Gerar relatório", type="primary"):
             rel = query_relatorio_candidato(params, cand_sel)
+
             if not rel.get("ok"):
                 st.warning("Sem dados para esse candidato no recorte atual.")
             else:
@@ -423,6 +455,7 @@ if busca and len(busca.strip()) >= 2:
                 cB.metric("Partido", info["partido"])
                 cC.metric("Município", info["municipio"])
                 cD.metric("Eleição", f"{info['ano']} • {info['tipo']} • T{info['turno']}")
+
                 st.markdown(f"**Candidato:** {info['candidato']}  \n**Cargo:** {info['cargo']}")
 
                 t1, t2 = st.columns(2)
@@ -439,12 +472,11 @@ if busca and len(busca.strip()) >= 2:
 # ====== Tabela ======
 st.subheader("Candidatos")
 
-df = query_ranking(params, order_by_votes=(ordem == "Votos (desc)"))
+df = query_ranking(
+    params=params,
+    order_by_votes=(ordem == "Votos (desc)"),
+    top_n=top_n,
+    busca=busca,
+)
 
-if busca:
-    df = df[df["candidato"].str.contains(busca, case=False, na=False)]
-
-if top_n is None:
-    st.dataframe(df, use_container_width=True, hide_index=True, height=520)
-else:
-    st.dataframe(df.head(top_n), use_container_width=True, hide_index=True, height=520)
+st.dataframe(df, use_container_width=True, hide_index=True, height=520)
