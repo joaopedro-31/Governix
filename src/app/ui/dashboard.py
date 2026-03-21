@@ -1,4 +1,3 @@
-# src/app/ui/dashboard.py
 from __future__ import annotations
 
 import sys
@@ -35,6 +34,18 @@ st.markdown(
   padding-right: 0.8rem;
 }
 
+.metric-card {
+  background: #111827;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.small-muted {
+  color: #9ca3af;
+  font-size: 0.88rem;
+}
+
 @media (max-width: 768px) {
   h1 { font-size: 1.25rem; }
   h2, h3 { font-size: 1.05rem; }
@@ -56,13 +67,13 @@ def df_query(sql: str, params: dict | None = None) -> pd.DataFrame:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
+                if cur.description is None:
+                    return pd.DataFrame()
                 cols = [d.name for d in cur.description]
                 rows = cur.fetchall()
         return pd.DataFrame(rows, columns=cols)
     except Exception as e:
         st.error(f"Erro SQL: {e}")
-        st.code(sql)
-        st.write(params)
         raise
 
 
@@ -71,6 +82,13 @@ def get_secret(key: str, default=None):
         return st.secrets.get(key, default)
     except Exception:
         return default
+
+
+def format_int(value) -> str:
+    try:
+        return f"{int(value):,}".replace(",", ".")
+    except Exception:
+        return "-"
 
 
 def build_where_and_params(base_params: dict, busca: str | None = None, candidato: str | None = None):
@@ -258,7 +276,7 @@ def list_candidatos_match(params: dict, termo: str) -> list[str]:
 
 @st.cache_data(ttl=60)
 def query_relatorio_candidato(params: dict, candidato: str) -> dict:
-    # relatório do candidato ignora bairro e local para não "cortar" o total
+    # ignora bairro e local para não cortar o total do município no relatório
     params_rel = dict(params)
     params_rel["bairro"] = None
     params_rel["local_votacao"] = None
@@ -335,6 +353,35 @@ def query_relatorio_candidato(params: dict, candidato: str) -> dict:
 
 
 # =========================
+# Session state
+# =========================
+default_uf = get_secret("UF_PADRAO", "CE")
+default_municipio = get_secret("MUNICIPIO_PADRAO", "FORTALEZA")
+
+if "filtros_aplicados" not in st.session_state:
+    st.session_state["filtros_aplicados"] = {
+        "uf": default_uf,
+        "municipio": default_municipio,
+        "tipo": None,
+        "ano": None,
+        "turno": None,
+        "cargo": None,
+        "regional": "(Todas)",
+        "bairro": "(Todos)",
+        "local_votacao": "(Todos)",
+        "busca": "",
+        "ordem": "Votos (desc)",
+        "mostrar_opcao": "10",
+    }
+
+if "relatorio_candidato_nome" not in st.session_state:
+    st.session_state["relatorio_candidato_nome"] = None
+
+if "relatorio_dados" not in st.session_state:
+    st.session_state["relatorio_dados"] = None
+
+
+# =========================
 # UI
 # =========================
 st.title("GOVERNIX • Dashboard Eleitoral")
@@ -353,130 +400,299 @@ with st.expander("Diagnóstico", expanded=False):
         st.exception(e)
         st.stop()
 
-default_uf = get_secret("UF_PADRAO", "CE")
+# usa UF do estado aplicado, não do widget em tempo real
+uf_for_filters = st.session_state["filtros_aplicados"]["uf"].strip().upper()
+anos, tipos, turnos, cargos, municipios, regionais = load_filters(uf_for_filters)
+
+municipio_val_for_filters = st.session_state["filtros_aplicados"]["municipio"]
+if municipio_val_for_filters == "(Todos)":
+    municipio_val_for_filters = None
+
+bairros, locais = load_bairros_locais(uf_for_filters, municipio_val_for_filters)
 
 st.subheader("Filtros")
+st.caption("Ajuste os filtros e clique em Aplicar filtros para atualizar os dados.")
 
-# Linha 1: UF / Município
-c1, c2 = st.columns(2)
-with c1:
-    uf = st.text_input("UF", value=default_uf).strip().upper()
+with st.form("form_filtros", clear_on_submit=False):
+    # Linha 1
+    c1, c2 = st.columns(2)
+    with c1:
+        uf_input = st.text_input(
+            "UF",
+            value=st.session_state["filtros_aplicados"]["uf"],
+        ).strip().upper()
 
-anos, tipos, turnos, cargos, municipios, regionais = load_filters(uf)
+    with c2:
+        mun_options = ["(Todos)"] + municipios if municipios else ["(Todos)"]
+        mun_default = st.session_state["filtros_aplicados"]["municipio"] or "(Todos)"
+        mun_index = mun_options.index(mun_default) if mun_default in mun_options else 0
+        municipio = st.selectbox("Município", mun_options, index=mun_index)
 
-with c2:
-    mun_options = ["(Todos)"] + municipios if municipios else ["(Todos)"]
-    fortaleza_idx = 0
-    for i, m in enumerate(mun_options):
-        if isinstance(m, str) and m.strip().upper() == "FORTALEZA":
-            fortaleza_idx = i
-            break
-    municipio = st.selectbox("Município", mun_options, index=fortaleza_idx)
+    municipio_val = None if municipio == "(Todos)" else municipio
+    bairros_form, locais_form = load_bairros_locais(uf_input, municipio_val)
 
-municipio_val = None if municipio == "(Todos)" else municipio
-bairros, locais = load_bairros_locais(uf, municipio_val)
+    # Linha 2
+    c3, c4 = st.columns(2)
+    with c3:
+        tipo_default = st.session_state["filtros_aplicados"]["tipo"]
+        tipo_index = tipos.index(tipo_default) if tipo_default in tipos else 0
+        tipo = st.selectbox("Tipo de eleição", tipos, index=tipo_index) if tipos else ""
 
-# Linha 2: Tipo / Ano
-c3, c4 = st.columns(2)
-with c3:
-    tipo = st.selectbox("Tipo", tipos) if tipos else ""
-with c4:
-    ano = st.selectbox("Ano", anos) if anos else 0
+    with c4:
+        ano_default = st.session_state["filtros_aplicados"]["ano"]
+        ano_index = anos.index(ano_default) if ano_default in anos else 0
+        ano = st.selectbox("Ano", anos, index=ano_index) if anos else 0
 
-# Linha 3: Turno / Cargo
-c5, c6 = st.columns(2)
-with c5:
-    turno = st.selectbox("Turno", turnos) if turnos else 1
-with c6:
-    cargo_default_idx = cargos.index("VEREADOR") if "VEREADOR" in cargos else 0
-    cargo = st.selectbox("Cargo", cargos, index=cargo_default_idx) if cargos else ""
+    # Linha 3
+    c5, c6 = st.columns(2)
+    with c5:
+        turno_default = st.session_state["filtros_aplicados"]["turno"]
+        turno_index = turnos.index(turno_default) if turno_default in turnos else 0
+        turno = st.selectbox("Turno", turnos, index=turno_index) if turnos else 1
 
-# Linha 4: Regional / Bairro
-c7, c8 = st.columns(2)
-with c7:
-    regional = st.selectbox("Regional (opcional)", ["(Todas)"] + regionais) if regionais else "(Todas)"
-with c8:
-    if municipio_val is None:
-        bairro = "(Todos)"
-        st.selectbox("Bairro (opcional)", ["(Todos)"], index=0, disabled=True)
-    else:
-        bairro = st.selectbox("Bairro (opcional)", ["(Todos)"] + bairros) if bairros else "(Todos)"
+    with c6:
+        cargo_default = st.session_state["filtros_aplicados"]["cargo"]
+        if cargo_default in cargos:
+            cargo_index = cargos.index(cargo_default)
+        else:
+            cargo_index = cargos.index("VEREADOR") if "VEREADOR" in cargos else 0
+        cargo = st.selectbox("Cargo", cargos, index=cargo_index) if cargos else ""
 
-# Linha 5: Local / Busca
-c9, c10 = st.columns(2)
-with c9:
-    if municipio_val is None:
-        local_votacao = "(Todos)"
-        st.selectbox("Local de votação (opcional)", ["(Todos)"], index=0, disabled=True)
-    else:
-        local_votacao = st.selectbox("Local de votação (opcional)", ["(Todos)"] + locais) if locais else "(Todos)"
-with c10:
-    busca = st.text_input("Buscar candidato (contém)")
+    # Linha 4
+    c7, c8 = st.columns(2)
+    with c7:
+        reg_options = ["(Todas)"] + regionais if regionais else ["(Todas)"]
+        reg_default = st.session_state["filtros_aplicados"]["regional"]
+        reg_index = reg_options.index(reg_default) if reg_default in reg_options else 0
+        regional = st.selectbox("Regional (opcional)", reg_options, index=reg_index)
 
-# Linha 6: Ordenação / Quantidade
-c11, c12 = st.columns(2)
-with c11:
-    ordem = st.selectbox("Ordenação", ["Alfabética", "Votos (desc)"])
-with c12:
-    mostrar_opcao = st.selectbox("Mostrar quantos?", ["10", "50", "100", "200", "500", "Todos"], index=0)
-    top_n = None if mostrar_opcao == "Todos" else int(mostrar_opcao)
+    with c8:
+        if municipio_val is None:
+            bairro = "(Todos)"
+            st.selectbox("Bairro (opcional)", ["(Todos)"], index=0, disabled=True)
+        else:
+            bairro_options = ["(Todos)"] + bairros_form if bairros_form else ["(Todos)"]
+            bairro_default = st.session_state["filtros_aplicados"]["bairro"]
+            bairro_index = bairro_options.index(bairro_default) if bairro_default in bairro_options else 0
+            bairro = st.selectbox("Bairro (opcional)", bairro_options, index=bairro_index)
 
+    # Linha 5
+    c9, c10 = st.columns(2)
+    with c9:
+        if municipio_val is None:
+            local_votacao = "(Todos)"
+            st.selectbox("Local de votação (opcional)", ["(Todos)"], index=0, disabled=True)
+        else:
+            local_options = ["(Todos)"] + locais_form if locais_form else ["(Todos)"]
+            local_default = st.session_state["filtros_aplicados"]["local_votacao"]
+            local_index = local_options.index(local_default) if local_default in local_options else 0
+            local_votacao = st.selectbox("Local de votação (opcional)", local_options, index=local_index)
+
+    with c10:
+        busca = st.text_input(
+            "Nome do candidato",
+            value=st.session_state["filtros_aplicados"]["busca"],
+            placeholder="Digite parte do nome",
+        )
+
+    # Linha 6
+    c11, c12 = st.columns(2)
+    with c11:
+        ordem_options = ["Alfabética", "Votos (desc)"]
+        ordem_default = st.session_state["filtros_aplicados"]["ordem"]
+        ordem_index = ordem_options.index(ordem_default) if ordem_default in ordem_options else 1
+        ordem = st.selectbox("Ordenar por", ordem_options, index=ordem_index)
+
+    with c12:
+        mostrar_options = ["10", "50", "100", "200", "500", "Todos"]
+        mostrar_default = st.session_state["filtros_aplicados"]["mostrar_opcao"]
+        mostrar_index = mostrar_options.index(mostrar_default) if mostrar_default in mostrar_options else 0
+        mostrar_opcao = st.selectbox("Quantidade de resultados", mostrar_options, index=mostrar_index)
+
+    c_btn1, c_btn2 = st.columns([1, 1])
+    with c_btn1:
+        aplicar = st.form_submit_button("Aplicar filtros", type="primary")
+    with c_btn2:
+        limpar_relatorio = st.form_submit_button("Limpar relatório")
+
+if limpar_relatorio:
+    st.session_state["relatorio_candidato_nome"] = None
+    st.session_state["relatorio_dados"] = None
+
+if aplicar:
+    st.session_state["filtros_aplicados"] = {
+        "uf": uf_input,
+        "municipio": municipio,
+        "tipo": tipo,
+        "ano": ano,
+        "turno": turno,
+        "cargo": cargo,
+        "regional": regional,
+        "bairro": bairro,
+        "local_votacao": local_votacao,
+        "busca": busca,
+        "ordem": ordem,
+        "mostrar_opcao": mostrar_opcao,
+    }
+
+    # evita mostrar relatório velho com filtros novos
+    st.session_state["relatorio_candidato_nome"] = None
+    st.session_state["relatorio_dados"] = None
+
+f = st.session_state["filtros_aplicados"]
+
+top_n = None if f["mostrar_opcao"] == "Todos" else int(f["mostrar_opcao"])
 params = {
-    "ano": ano,
-    "tipo": tipo,
-    "turno": turno,
-    "cargo": cargo,
-    "uf": uf,
-    "municipio": municipio_val,
-    "regional": None if regional == "(Todas)" else regional,
-    "bairro": None if bairro == "(Todos)" else bairro,
-    "local_votacao": None if local_votacao == "(Todos)" else local_votacao,
+    "ano": f["ano"],
+    "tipo": f["tipo"],
+    "turno": f["turno"],
+    "cargo": f["cargo"],
+    "uf": f["uf"],
+    "municipio": None if f["municipio"] == "(Todos)" else f["municipio"],
+    "regional": None if f["regional"] == "(Todas)" else f["regional"],
+    "bairro": None if f["bairro"] == "(Todos)" else f["bairro"],
+    "local_votacao": None if f["local_votacao"] == "(Todos)" else f["local_votacao"],
 }
 
-# ====== Relatório (se houver busca) ======
-if busca and len(busca.strip()) >= 2:
-    candidatos_match = list_candidatos_match(params, busca.strip())
+if top_n is None:
+    st.warning("Exibir todos os registros pode deixar a interface mais lenta.")
 
-    if len(candidatos_match) == 0:
-        st.warning("Nenhum candidato encontrado para essa busca no recorte atual.")
-    else:
-        st.subheader("Relatório do candidato")
-        cand_sel = st.selectbox("Selecione o candidato", candidatos_match, index=0)
+st.divider()
 
-        if st.button("Gerar relatório", type="primary"):
-            rel = query_relatorio_candidato(params, cand_sel)
+# =========================
+# Ranking
+# =========================
+with st.spinner("Carregando ranking..."):
+    df = query_ranking(
+        params=params,
+        order_by_votes=(f["ordem"] == "Votos (desc)"),
+        top_n=top_n,
+        busca=f["busca"],
+    )
 
-            if not rel.get("ok"):
-                st.warning("Sem dados para esse candidato no recorte atual.")
-            else:
-                info = rel["info"]
-                cA, cB, cC, cD = st.columns(4)
-                cA.metric("Votos totais", f"{int(info['votos_totais']):,}".replace(",", "."))
-                cB.metric("Partido", info["partido"])
-                cC.metric("Município", info["municipio"])
-                cD.metric("Eleição", f"{info['ano']} • {info['tipo']} • T{info['turno']}")
+# KPIs
+st.subheader("Resumo do recorte")
 
-                st.markdown(f"**Candidato:** {info['candidato']}  \n**Cargo:** {info['cargo']}")
+if len(df):
+    total_votos = int(df["votos"].sum())
+    total_candidatos = int(df["candidato"].nunique())
+    lider = df.sort_values(["votos", "candidato"], ascending=[False, True]).iloc[0]["candidato"]
+    partido_lider = df.sort_values(["votos", "candidato"], ascending=[False, True]).iloc[0]["partido"]
+else:
+    total_votos = 0
+    total_candidatos = 0
+    lider = "-"
+    partido_lider = "-"
 
-                t1, t2 = st.columns(2)
-                with t1:
-                    st.markdown("### Top 10 Bairros")
-                    st.dataframe(rel["top_bairros"], use_container_width=True, hide_index=True)
-                with t2:
-                    st.markdown("### Top 10 Locais de votação")
-                    st.dataframe(rel["top_locais"], use_container_width=True, hide_index=True)
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Total de votos", format_int(total_votos))
+k2.metric("Candidatos", format_int(total_candidatos))
+k3.metric("Líder", lider)
+k4.metric("Partido do líder", partido_lider)
 
-                st.markdown("### Top 3 Regionais")
-                st.dataframe(rel["top_regionais"], use_container_width=True, hide_index=True)
-
-# ====== Tabela ======
-st.subheader("Candidatos")
-
-df = query_ranking(
-    params=params,
-    order_by_votes=(ordem == "Votos (desc)"),
-    top_n=top_n,
-    busca=busca,
+st.caption(
+    "O ranking abaixo respeita todos os filtros aplicados. "
+    "Já o relatório do candidato desconsidera bairro e local de votação para preservar o total do município no recorte principal."
 )
 
-st.dataframe(df, use_container_width=True, hide_index=True, height=520)
+st.divider()
+
+# =========================
+# Relatório do candidato
+# =========================
+if f["busca"] and len(f["busca"].strip()) >= 2:
+    with st.spinner("Buscando candidatos..."):
+        candidatos_match = list_candidatos_match(params, f["busca"].strip())
+
+    st.subheader("Relatório do candidato")
+
+    if len(candidatos_match) == 0:
+        st.info("Nenhum candidato encontrado para essa busca no recorte atual.")
+    else:
+        cand_default = st.session_state["relatorio_candidato_nome"]
+        if cand_default not in candidatos_match:
+            cand_default = candidatos_match[0]
+
+        cand_index = candidatos_match.index(cand_default) if cand_default in candidatos_match else 0
+        cand_sel = st.selectbox("Selecione o candidato", candidatos_match, index=cand_index)
+
+        c_rel1, c_rel2 = st.columns([1, 1])
+        with c_rel1:
+            gerar_relatorio = st.button("Gerar relatório do candidato", type="primary")
+        with c_rel2:
+            limpar_cand = st.button("Limpar seleção do candidato")
+
+        if limpar_cand:
+            st.session_state["relatorio_candidato_nome"] = None
+            st.session_state["relatorio_dados"] = None
+
+        if gerar_relatorio:
+            with st.spinner("Gerando relatório..."):
+                rel = query_relatorio_candidato(params, cand_sel)
+            st.session_state["relatorio_candidato_nome"] = cand_sel
+            st.session_state["relatorio_dados"] = rel
+
+        rel = st.session_state["relatorio_dados"]
+        if rel and rel.get("ok"):
+            info = rel["info"]
+
+            st.markdown(f"### {info['candidato']}")
+            st.caption(f"Partido: {info['partido']} • Cargo: {info['cargo']} • Município: {info['municipio']}")
+
+            cA, cB, cC, cD = st.columns(4)
+            cA.metric("Votos totais", format_int(info["votos_totais"]))
+            cB.metric("Partido", info["partido"])
+            cC.metric("Município", info["municipio"])
+            cD.metric("Eleição", f"{info['ano']} • {info['tipo']} • T{info['turno']}")
+
+            t1, t2 = st.columns(2)
+            with t1:
+                st.markdown("### Top 10 bairros")
+                top_bairros = rel["top_bairros"].copy()
+                if len(top_bairros):
+                    top_bairros["votos"] = top_bairros["votos"].map(format_int)
+                st.dataframe(top_bairros, use_container_width=True, hide_index=True)
+
+            with t2:
+                st.markdown("### Top 10 locais de votação")
+                top_locais = rel["top_locais"].copy()
+                if len(top_locais):
+                    top_locais["votos"] = top_locais["votos"].map(format_int)
+                st.dataframe(top_locais, use_container_width=True, hide_index=True)
+
+            st.markdown("### Top 3 regionais")
+            top_regionais = rel["top_regionais"].copy()
+            if len(top_regionais):
+                top_regionais["votos"] = top_regionais["votos"].map(format_int)
+            st.dataframe(top_regionais, use_container_width=True, hide_index=True)
+
+        elif rel and not rel.get("ok"):
+            st.warning("Sem dados para esse candidato no recorte atual.")
+
+st.divider()
+
+# =========================
+# Tabela + exportação
+# =========================
+st.subheader("Candidatos")
+
+if len(df) == 0:
+    st.info("Nenhum resultado encontrado para os filtros aplicados.")
+else:
+    df_view = df.copy()
+    df_export = df.copy()
+
+    df_view["votos"] = df_view["votos"].map(format_int)
+
+    cta1, cta2 = st.columns([1, 3])
+    with cta1:
+        st.download_button(
+            "Baixar CSV",
+            data=df_export.to_csv(index=False).encode("utf-8-sig"),
+            file_name="ranking_candidatos.csv",
+            mime="text/csv",
+        )
+    with cta2:
+        st.caption(f"{len(df_export)} registro(s) exibido(s) no ranking atual.")
+
+    st.dataframe(df_view, use_container_width=True, hide_index=True, height=520)
