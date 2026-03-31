@@ -163,7 +163,7 @@ def render_filters():
         with c_btn1:
             aplicar = st.form_submit_button("Aplicar filtros", type="primary")
         with c_btn2:
-            limpar_relatorio = st.form_submit_button("Limpar relatório")
+            limpar_relatorio = st.form_submit_button("Limpar relatório", type="primary")
 
     if limpar_relatorio:
         st.session_state["relatorio_candidato_nome"] = None

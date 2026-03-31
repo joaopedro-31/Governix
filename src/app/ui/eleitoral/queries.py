@@ -76,7 +76,7 @@ def load_tipos(uf: str):
         SELECT DISTINCT tipo
         FROM mv_ranking_candidato
         WHERE uf = %(uf)s
-        ORDER BY tipo;
+        ORDER BY tipo DESC;
         """,
         {"uf": uf},
     )
@@ -93,7 +93,7 @@ def load_dependent_filters(uf: str, tipo: str):
         FROM mv_ranking_candidato
         WHERE uf = %(uf)s
           AND tipo = %(tipo)s
-        ORDER BY ano DESC;
+        ORDER BY ano;
         """,
         params,
     )

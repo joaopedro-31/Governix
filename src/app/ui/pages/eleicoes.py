@@ -18,7 +18,7 @@ from app.ui.eleitoral.queries import (
     query_relatorio_candidato,
 )
 from app.ui.eleitoral.state import init_session_state
-from app.ui.eleitoral.ui import inject_css, set_page
+from app.ui.eleitoral.ui import inject_css, set_page, show_ranking_loading
 
 set_page()
 inject_css()
@@ -60,13 +60,16 @@ if top_n is None:
 
 st.divider()
 
-with st.spinner("Carregando ranking..."):
-    df = query_ranking(
-        params=params,
-        votes_sort_direction=f["ordem_votos"],
-        top_n=top_n,
-        busca=f["busca"],
-    )
+ranking_status = show_ranking_loading()
+
+df = query_ranking(
+    params=params,
+    votes_sort_direction=f["ordem_votos"],
+    top_n=top_n,
+    busca=f["busca"],
+)
+
+ranking_status.empty()
 
 st.subheader("Resumo do recorte")
 
