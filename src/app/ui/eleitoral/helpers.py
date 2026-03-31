@@ -9,17 +9,17 @@ def format_int(value) -> str:
 
 
 def normalize_tipo(tipo: str | None) -> str:
-    return (tipo or "").strip().lower()
+    return (tipo or "").strip().upper()
 
 
 def is_municipal(tipo: str | None) -> bool:
     t = normalize_tipo(tipo)
-    return "municip" in t
+    return "MUNICIP" in t
 
 
 def is_estadual(tipo: str | None) -> bool:
     t = normalize_tipo(tipo)
-    return "estad" in t
+    return "ESTAD" in t
 
 
 def first_or(default, values):

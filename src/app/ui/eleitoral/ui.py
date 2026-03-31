@@ -90,42 +90,98 @@ def inject_css():
             box-shadow: 0 0 0 1px var(--blue) !important;
         }
 
+        /* SELECTBOX */
         div[data-baseweb="select"] > div {
             background: var(--card-2) !important;
             border: 1px solid var(--border) !important;
             border-radius: 10px !important;
             color: var(--white) !important;
+            min-height: 46px !important;
+        }
+
+        div[data-baseweb="select"] > div:hover {
+            border: 1px solid var(--blue) !important;
+        }
+
+        div[data-baseweb="select"] > div:focus-within {
+            border: 1px solid var(--blue) !important;
+            box-shadow: 0 0 0 1px var(--blue) !important;
         }
 
         div[data-baseweb="select"] span {
             color: var(--white) !important;
         }
 
+        div[data-baseweb="select"] svg {
+            fill: var(--yellow) !important;
+        }
+
+        div[role="listbox"] {
+            background: var(--card) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 10px !important;
+        }
+
+        div[role="option"] {
+            background: var(--card) !important;
+            color: var(--white) !important;
+        }
+
+        div[role="option"]:hover {
+            background: rgba(96,165,250,0.18) !important;
+            color: var(--white) !important;
+        }
+
+        div[aria-selected="true"] {
+            background: rgba(34,197,94,0.22) !important;
+            color: var(--white) !important;
+        }
+
+        /* BOTÕES */
         .stButton > button,
         .stDownloadButton > button,
         div.stFormSubmitButton > button {
-            border-radius: 10px;
-            border: none;
-            font-weight: 700;
+            border-radius: 10px !important;
+            border: none !important;
+            font-weight: 700 !important;
+            min-height: 44px !important;
         }
 
         div.stFormSubmitButton > button[kind="primary"],
         .stButton > button[kind="primary"] {
-            background: #22C55E !important;
-            color: #00F !important;
+            background: var(--blue) !important;
+            color: #0B1220 !important;
+        }
+
+        div.stFormSubmitButton > button[kind="primary"]:hover,
+        .stButton > button[kind="primary"]:hover {
+            background: #93C5FD !important;
+            color: #0B1220 !important;
+        }
+
+        div.stFormSubmitButton > button[kind="secondary"],
+        .stButton > button[kind="secondary"] {
+            background: var(--green) !important;
+            color: var(--white) !important;
+        }
+
+        div.stFormSubmitButton > button[kind="secondary"]:hover,
+        .stButton > button[kind="secondary"]:hover {
+            background: #16A34A !important;
+            color: var(--white) !important;
         }
 
         .stDownloadButton > button {
-            background: var(--yellow);
-            color: #1F2937;
+            background: var(--yellow) !important;
+            color: #1F2937 !important;
         }
 
-        .stButton > button:hover,
-        .stDownloadButton > button:hover,
-        div.stFormSubmitButton > button:hover {
-            filter: brightness(1.05);
+        .stDownloadButton > button:hover {
+            background: #FDE047 !important;
+            color: #1F2937 !important;
         }
 
+        /* MÉTRICAS */
         div[data-testid="stMetric"] {
             background: var(--card);
             border: 1px solid var(--border);
@@ -134,13 +190,14 @@ def inject_css():
         }
 
         div[data-testid="stMetricLabel"] {
-            color: var(--muted);
+            color: var(--muted) !important;
         }
 
         div[data-testid="stMetricValue"] {
-            color: var(--green);
+            color: var(--green) !important;
         }
 
+        /* ALERTAS */
         div[data-testid="stAlert"] {
             background: var(--card);
             border: 1px solid var(--border);
@@ -148,6 +205,7 @@ def inject_css():
             color: var(--white);
         }
 
+        /* DATAFRAME */
         div[data-testid="stDataFrame"] {
             background: var(--card);
             border: 1px solid var(--border);
@@ -155,6 +213,7 @@ def inject_css():
             overflow: hidden;
         }
 
+        /* LOADING */
         .ranking-loading-box {
             min-height: 180px;
             border-radius: 16px;
@@ -199,7 +258,11 @@ def inject_css():
             h1 { font-size: 1.25rem; }
             h2, h3 { font-size: 1.05rem; }
             .block-container { padding-left: 0.6rem; padding-right: 0.6rem; }
-            div.stButton > button { width: 100%; }
+            div.stButton > button,
+            div.stFormSubmitButton > button,
+            .stDownloadButton > button {
+                width: 100%;
+            }
             .stTextInput input { min-height: 44px; }
             div[data-baseweb="select"] { min-height: 44px; }
         }
@@ -207,52 +270,13 @@ def inject_css():
         """,
         unsafe_allow_html=True,
     )
-    
+
+
 def show_ranking_loading():
     placeholder = st.empty()
 
     placeholder.markdown(
         """
-        <style>
-        .ranking-loading-box {
-            min-height: 180px;
-            border-radius: 16px;
-            border: 1px solid rgba(255,255,255,0.12);
-            background: linear-gradient(135deg, #111827 0%, #1f2937 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-direction: column;
-            gap: 14px;
-            margin: 8px 0 18px 0;
-        }
-
-        .ranking-loading-spinner {
-            width: 56px;
-            height: 56px;
-            border: 6px solid rgba(255,255,255,0.18);
-            border-top: 6px solid #60a5fa;
-            border-radius: 50%;
-            animation: ranking-spin 0.9s linear infinite;
-        }
-
-        .ranking-loading-text {
-            font-size: 1.15rem;
-            font-weight: 600;
-            color: white;
-        }
-
-        .ranking-loading-subtext {
-            font-size: 0.95rem;
-            color: #cbd5e1;
-        }
-
-        @keyframes ranking-spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        </style>
-
         <div class="ranking-loading-box">
             <div class="ranking-loading-spinner"></div>
             <div class="ranking-loading-text">Carregando ranking...</div>

@@ -25,17 +25,24 @@ def render_filters():
 
     with p2:
         tipos_disponiveis = load_tipos(uf_input) if uf_input else []
+        tipo_map = {t.upper(): t for t in tipos_disponiveis}
+        tipos_display = list(tipo_map.keys())
+
         tipo_atual = first_or(f["tipo"], tipos_disponiveis)
-        tipo = (
+        tipo_atual_display = tipo_atual.upper() if tipo_atual else None
+
+        tipo_display = (
             st.selectbox(
                 "Tipo de eleição",
-                tipos_disponiveis,
-                index=tipos_disponiveis.index(tipo_atual) if tipo_atual in tipos_disponiveis else 0,
+                tipos_display,
+                index=tipos_display.index(tipo_atual_display) if tipo_atual_display in tipos_display else 0,
                 key="tipo_primary_select",
             )
-            if tipos_disponiveis
+            if tipos_display
             else None
         )
+
+        tipo = tipo_map[tipo_display] if tipo_display else None
 
     if uf_input != f["uf"] or tipo != f["tipo"]:
         f["uf"] = uf_input
